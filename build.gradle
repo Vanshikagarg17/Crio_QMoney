@@ -1,0 +1,203 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath("org.springframework.boot:spring-boot-gradle-plugin:2.1.4.RELEASE")
+        classpath("gradle.plugin.com.github.spotbugs:spotbugs-gradle-plugin:1.7.1")
+    }
+}
+
+
+plugins {
+    id 'java'
+    id 'jacoco'
+    id "org.sonarqube" version "2.8"
+    id 'maven-publish'
+}
+
+ext {
+    buildId = System.currentTimeMillis()
+    // Dependency versions
+    springBootVersion = '2.1.8.RELEASE'
+    springCoreVersion = '5.1.9.RELEASE'
+    jacksonVersion = "2.9.8"
+}
+
+buildDir = '/tmp/external_build'
+
+apply plugin: 'io.spring.dependency-management'
+apply plugin: "idea"
+apply plugin: "checkstyle"
+apply plugin: "com.github.spotbugs"
+
+version '1.0-SNAPSHOT'
+
+sourceCompatibility = 1.8
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+dependencies {
+
+}
+
+task installGitHooks(type: Copy) {
+    from new File(rootProject.rootDir, "__CRIO__/pre-push")
+    into { new File(rootProject.rootDir, ".git/hooks") }
+    fileMode 0777
+}
+
+checkstyle {
+    toolVersion "7.8.1"
+    configFile file("${rootProject.rootDir}/__CRIO__/checkstyle.xml")
+}
+
+jacoco {
+    toolVersion = "0.8.4"
+    reportsDir = file("${rootProject.rootDir}/build/reports/jacco")
+}
+
+jacocoTestReport {
+    reports {
+        xml.enabled true
+        csv.enabled false
+        //xml.destination file("${rootProject.projectDir}/customJacocoReportDir/jacocoXml")
+        xml.destination file("${jacoco.reportsDir}/jacocoXml")
+    }
+}
+
+spotbugs {
+    toolVersion = "3.1.12"
+    sourceSets = [sourceSets.main]
+}
+
+tasks.withType(com.github.spotbugs.SpotBugsTask) {
+    reports {
+        html.enabled false
+        xml.enabled true
+    }
+}
+
+configurations {
+    all {
+        exclude group: 'org.springframework.boot', module: 'spring-boot-starter-logging'
+    }
+}
+
+test {
+    useJUnitPlatform()
+}
+
+subprojects {
+    apply plugin: "java-library"
+    apply plugin: "idea"
+    apply plugin: "checkstyle"
+    apply plugin: "pmd"
+    apply plugin: "jacoco"
+    apply plugin: "com.github.spotbugs"
+
+    configurations {
+        compileOnly {
+            extendsFrom annotationProcessor
+        }
+    }
+
+    repositories {
+        mavenCentral()
+    }
+
+    test {
+        reports {
+            junitXml.enabled = true
+            def destinationDirectory = System.getProperty("user.home") + "/.gradle/daemon/${buildId}/test-results"
+            junitXml.destination = file(destinationDirectory)
+            html.enabled = true
+        }
+        useJUnitPlatform {
+        }
+        afterSuite { desc, result ->
+            if (!desc.parent) {
+                println "\nTEST RESULT: ${result.resultType}"
+                println "TEST SUMMARY: RAN ${result.testCount} TESTS, " +
+                        "${result.successfulTestCount} SUCCEEDED, " +
+                        "${result.failedTestCount} FAILED, " +
+                        "${result.skippedTestCount} SKIPPED"
+            }
+        }
+    }
+
+    checkstyle {
+        toolVersion "7.8.1"
+        configFile file("${rootProject.projectDir}/__CRIO__/checkstyle.xml")
+    }
+
+    pmd {
+        toolVersion = "6.10.0"
+        sourceSets = [sourceSets.main]
+        ruleSetFiles = files("${rootProject.projectDir}/__CRIO__/ruleset.xml")
+        ignoreFailures = true
+    }
+
+    spotbugs {
+        toolVersion = "3.1.12"
+        sourceSets = [sourceSets.main]
+    }
+
+    tasks.withType(com.github.spotbugs.SpotBugsTask) {
+        reports {
+            html.enabled true
+            xml.enabled false
+        }
+    }
+
+    jacoco {
+        toolVersion = "0.7.1.201405082137"
+        reportsDir = file("$buildDir/customJacocoReportDir")
+    }
+
+    task installGitHooks(type: Copy) {
+        from new File(rootProject.rootDir, '__CRIO__/pre-push')
+        into { new File(rootProject.rootDir, '.git/hooks') }
+        fileMode 0777
+    }
+
+    build.dependsOn installGitHooks
+}
+
+task cleanupCrioJars {
+    doLast {
+        def userHome = System.properties['user.home']
+        def mavenDir = new File(userHome, '.m2/repository/com/crio/')
+
+        if (mavenDir.exists()) {
+            delete mavenDir
+        }
+    }
+}
+
+task verifyMavenJarsCreated {
+    dependsOn cleanupCrioJars
+    dependsOn publishToMavenLocal
+    doLast {
+        def userHome = System.properties['user.home']
+        def mavenDir = new File(userHome, '.m2/repository/com/crio/warmup/annual-return/1.0.0')
+
+        if (!mavenDir.exists()) {
+            throw new Exception("maven repository directory not created")
+        }
+
+        // Then, Check if the file exists.
+        def jarFile = new File(mavenDir, 'annual-return-1.0.0.jar')
+        def pomFile = new File(mavenDir, 'annual-return-1.0.0.pom')
+
+        if (!jarFile.exists() || !pomFile.exists()) {
+            throw new Exception("maven repository directory exists, but files do not exist")
+        }
+
+        println("All Maven repository files are created and in place")
+    }
+}
+
